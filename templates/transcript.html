@@ -123,7 +123,328 @@
         {% endfor %}
     </div>
     
+    <!-- Floating "Add to Snippets" button -->
+    <button id="snippetsAddBtn" class="memory-add-button" style="display: none;" onclick="addToSnippets()">
+        ✂️ Add to Snippets
+    </button>
+    
     <script>
+        // Snippets functionality variables
+        let selectedText = '';
+        let sourceType = '';
+        
+        // Initialize snippets functionality when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSnippetsSelection();
+            addSnippetButtonsToExistingSummary();
+        });
+        
+        function initializeSnippetsSelection() {
+            // Add event listeners for text selection
+            document.addEventListener('mouseup', handleTextSelection);
+            document.addEventListener('keyup', handleTextSelection);
+        }
+        
+        function handleTextSelection() {
+            const selection = window.getSelection();
+            const selectedTextContent = selection.toString().trim();
+            
+            if (selectedTextContent.length > 0) {
+                // Determine if selection is from transcript or summary
+                const range = selection.getRangeAt(0);
+                const container = range.commonAncestorContainer;
+                
+                let sourceContainer = container;
+                while (sourceContainer && sourceContainer.nodeType !== Node.ELEMENT_NODE) {
+                    sourceContainer = sourceContainer.parentNode;
+                }
+                
+                let sourceTypeLocal = '';
+                if (sourceContainer) {
+                    if (sourceContainer.closest('#formatted-transcript') || sourceContainer.closest('#detailed-transcript')) {
+                        sourceTypeLocal = 'transcript';
+                    } else if (sourceContainer.closest('.summary-section')) {
+                        sourceTypeLocal = 'summary';
+                    }
+                }
+                
+                if (sourceTypeLocal) {
+                    showSnippetsButton(range, selectedTextContent, sourceTypeLocal);
+                } else {
+                    hideSnippetsButton();
+                }
+            } else {
+                hideSnippetsButton();
+            }
+        }
+        
+        function showSnippetsButton(range, text, type) {
+            const button = document.getElementById('snippetsAddBtn');
+            const rect = range.getBoundingClientRect();
+            
+            // Store selection data
+            selectedText = text;
+            sourceType = type;
+            
+            // Position button below the selection
+            button.style.left = Math.max(10, rect.left) + 'px';
+            button.style.top = (rect.bottom + window.scrollY + 8) + 'px';
+            button.style.display = 'block';
+            
+            // Hide button after 5 seconds
+            setTimeout(() => {
+                if (button.style.display === 'block') {
+                    hideSnippetsButton();
+                }
+            }, 5000);
+        }
+        
+        function hideSnippetsButton() {
+            document.getElementById('snippetsAddBtn').style.display = 'none';
+        }
+        
+        function addToSnippets() {
+            if (!selectedText) {
+                alert('No text selected. Please highlight some text first.');
+                return;
+            }
+            
+            const videoId = '{{ video_id }}';
+            
+            // Save snippet to database via API
+            fetch('/api/snippets', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    video_id: videoId,
+                    snippet_text: selectedText,
+                    source_type: sourceType
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Show success message
+                    alert('Snippet saved! ✂️\nVisit the Snippets page to view and manage your snippets.');
+                    
+                    // Hide the button
+                    hideSnippetsButton();
+                    
+                    // Clear selection
+                    if (window.getSelection) {
+                        window.getSelection().removeAllRanges();
+                    }
+                    
+                    // Temporarily highlight the saved text
+                    highlightSavedText();
+                } else {
+                    alert('Failed to save snippet: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                alert('Failed to save snippet: ' + error.message);
+            });
+        }
+        
+        function highlightSavedText() {
+            try {
+                const selection = window.getSelection();
+                if (selection.rangeCount > 0) {
+                    const range = selection.getRangeAt(0);
+                    const span = document.createElement('span');
+                    span.className = 'memory-selection-highlight';
+                    span.style.animation = 'pulse 2s ease-in-out';
+                    
+                    range.surroundContents(span);
+                    
+                    // Remove highlight after 3 seconds
+                    setTimeout(() => {
+                        if (span.parentNode) {
+                            const parent = span.parentNode;
+                            parent.insertBefore(document.createTextNode(span.textContent), span);
+                            parent.removeChild(span);
+                        }
+                    }, 3000);
+                }
+            } catch (e) {
+                // If highlighting fails (e.g., range spans multiple elements), just skip it
+                console.log('Could not highlight saved text:', e);
+            }
+        }
+        
+        function convertHtmlToMarkdown(element) {
+            if (!element) return '';
+            
+            let markdown = '';
+            
+            // Handle different element types
+            if (element.tagName === 'UL') {
+                // Convert unordered lists
+                const listItems = element.querySelectorAll('li');
+                listItems.forEach(li => {
+                    markdown += '- ' + li.textContent.trim() + '\n';
+                });
+            } else if (element.tagName === 'OL') {
+                // Convert ordered lists
+                const listItems = element.querySelectorAll('li');
+                listItems.forEach((li, index) => {
+                    markdown += `${index + 1}. ${li.textContent.trim()}\n`;
+                });
+            } else if (element.tagName === 'P') {
+                // Convert paragraphs, preserving bold and italic
+                let pText = element.innerHTML;
+                // Convert <strong> and <b> to **bold**
+                pText = pText.replace(/<(strong|b)>(.*?)<\/(strong|b)>/g, '**$2**');
+                // Convert <em> and <i> to *italic*
+                pText = pText.replace(/<(em|i)>(.*?)<\/(em|i)>/g, '*$2*');
+                // Remove other HTML tags but keep content
+                pText = pText.replace(/<[^>]+>/g, '');
+                markdown += pText.trim();
+            } else {
+                // For other elements, just get text content but preserve structure
+                let content = element.textContent.trim();
+                if (content) {
+                    // Try to preserve formatting by checking for bold/italic patterns
+                    if (element.querySelector('strong, b')) {
+                        // This element contains bold text - try to preserve it
+                        content = element.innerHTML;
+                        content = content.replace(/<(strong|b)>(.*?)<\/(strong|b)>/g, '**$2**');
+                        content = content.replace(/<(em|i)>(.*?)<\/(em|i)>/g, '*$2*');
+                        content = content.replace(/<[^>]+>/g, '');
+                    }
+                    markdown += content;
+                }
+            }
+            
+            return markdown;
+        }
+        
+        function addSnippetButtonsToExistingSummary() {
+            // Find existing summary content and add snippet buttons to headers
+            const summaryContent = document.querySelector('.summary-content .markdown-content');
+            if (!summaryContent) return;
+            
+            // Find all headers in the summary
+            const headers = summaryContent.querySelectorAll('h1, h2, h3');
+            headers.forEach(header => {
+                // Skip if already has a button
+                if (header.querySelector('button')) return;
+                
+                const headerText = header.textContent.trim();
+                const buttonId = 'snippet-btn-' + Math.random().toString(36).substr(2, 9);
+                
+                // Create button based on header level
+                let buttonStyle = '';
+                if (header.tagName === 'H1') {
+                    buttonStyle = 'padding: 8px 16px; font-size: 14px; margin-left: 10px;';
+                } else if (header.tagName === 'H2') {
+                    buttonStyle = 'padding: 6px 12px; font-size: 13px; margin-left: 10px;';
+                } else {
+                    buttonStyle = 'padding: 4px 8px; font-size: 12px; margin-left: 10px;';
+                }
+                
+                // Create and add the button
+                const button = document.createElement('button');
+                button.id = buttonId;
+                button.innerHTML = '✂️ Copy to Snippets';
+                button.setAttribute('onclick', `copyChapterToSnippets('${headerText.replace(/'/g, "\\'")}', this)`);
+                button.style.cssText = `background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; ${buttonStyle}`;
+                
+                // Style the header to flex layout
+                header.style.display = 'flex';
+                header.style.justifyContent = 'space-between';
+                header.style.alignItems = 'center';
+                header.style.margin = header.tagName === 'H1' ? '30px 0 20px 0' : header.tagName === 'H2' ? '25px 0 15px 0' : '20px 0 10px 0';
+                
+                header.appendChild(button);
+            });
+        }
+        
+        function copyChapterToSnippets(chapterTitle, buttonElement) {
+            const videoId = '{{ video_id }}';
+            
+            // Find the chapter content - preserve markdown formatting
+            const headerElement = buttonElement.parentElement;
+            let chapterContent = '## ' + chapterTitle + '\n\n';
+            
+            // Get the next sibling elements until we hit another header
+            let nextElement = headerElement.nextElementSibling;
+            while (nextElement && !nextElement.matches('h1, h2, h3')) {
+                if (nextElement.textContent && nextElement.textContent.trim()) {
+                    // Convert HTML back to markdown for better preservation
+                    let elementMarkdown = convertHtmlToMarkdown(nextElement);
+                    if (elementMarkdown.trim()) {
+                        chapterContent += elementMarkdown + '\n\n';
+                    }
+                }
+                nextElement = nextElement.nextElementSibling;
+            }
+            
+            // Clean up the content
+            chapterContent = chapterContent.trim();
+            
+            // Change button to loading state
+            const originalText = buttonElement.innerHTML;
+            buttonElement.innerHTML = '⏳ Saving...';
+            buttonElement.disabled = true;
+            buttonElement.style.background = '#666';
+            
+            // Save snippet to database via API
+            fetch('/api/snippets', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    video_id: videoId,
+                    snippet_text: chapterContent,
+                    source_type: 'summary'
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Show success state
+                    buttonElement.innerHTML = '✅ Saved!';
+                    buttonElement.style.background = '#4caf50';
+                    
+                    // Reset button after 3 seconds
+                    setTimeout(() => {
+                        buttonElement.innerHTML = originalText;
+                        buttonElement.disabled = false;
+                        buttonElement.style.background = '#4caf50';
+                    }, 3000);
+                } else {
+                    // Show error
+                    buttonElement.innerHTML = '❌ Error';
+                    buttonElement.style.background = '#f44336';
+                    alert('Failed to save snippet: ' + (data.error || 'Unknown error'));
+                    
+                    // Reset button after 3 seconds
+                    setTimeout(() => {
+                        buttonElement.innerHTML = originalText;
+                        buttonElement.disabled = false;
+                        buttonElement.style.background = '#4caf50';
+                    }, 3000);
+                }
+            })
+            .catch(error => {
+                // Show error
+                buttonElement.innerHTML = '❌ Error';
+                buttonElement.style.background = '#f44336';
+                alert('Failed to save snippet: ' + error.message);
+                
+                // Reset button after 3 seconds
+                setTimeout(() => {
+                    buttonElement.innerHTML = originalText;
+                    buttonElement.disabled = false;
+                    buttonElement.style.background = '#4caf50';
+                }, 3000);
+            });
+        }
+        
         function toggleTranscriptView() {
             const formattedDiv = document.getElementById('formatted-transcript');
             const detailedDiv = document.getElementById('detailed-transcript');
@@ -200,10 +521,19 @@
         function convertMarkdownToHtml(markdown) {
             let html = markdown;
             
-            // Convert headers (## Header -> <h2>Header</h2>)
-            html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-            html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-            html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+            // Convert headers with snippet buttons (## Header -> <h2>Header <button>...</button></h2>)
+            html = html.replace(/^### (.+)$/gm, (match, title) => {
+                const buttonId = 'snippet-btn-' + Math.random().toString(36).substr(2, 9);
+                return `<h3 style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0 10px 0; flex-wrap: wrap; gap: 10px;">${title} <button id="${buttonId}" onclick="copyChapterToSnippets('${title.replace(/'/g, "\\'")}', this)" style="background: #4caf50; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 10px; flex-shrink: 0;">✂️ Copy to Snippets</button></h3>`;
+            });
+            html = html.replace(/^## (.+)$/gm, (match, title) => {
+                const buttonId = 'snippet-btn-' + Math.random().toString(36).substr(2, 9);
+                return `<h2 style="display: flex; justify-content: space-between; align-items: center; margin: 25px 0 15px 0; flex-wrap: wrap; gap: 10px;">${title} <button id="${buttonId}" onclick="copyChapterToSnippets('${title.replace(/'/g, "\\'")}', this)" style="background: #4caf50; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; margin-left: 10px; flex-shrink: 0;">✂️ Copy to Snippets</button></h2>`;
+            });
+            html = html.replace(/^# (.+)$/gm, (match, title) => {
+                const buttonId = 'snippet-btn-' + Math.random().toString(36).substr(2, 9);
+                return `<h1 style="display: flex; justify-content: space-between; align-items: center; margin: 30px 0 20px 0; flex-wrap: wrap; gap: 10px;">${title} <button id="${buttonId}" onclick="copyChapterToSnippets('${title.replace(/'/g, "\\'")}', this)" style="background: #4caf50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; margin-left: 10px; flex-shrink: 0;">✂️ Copy to Snippets</button></h1>`;
+            });
             
             // Convert **bold** to <strong>bold</strong>
             html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
